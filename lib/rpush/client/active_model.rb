@@ -22,3 +22,6 @@ require 'rpush/client/active_model/wpns/notification'
 
 require 'rpush/client/active_model/wns/app'
 require 'rpush/client/active_model/wns/notification'
+
+require 'rpush/client/active_model/mozilla/app'
+require 'rpush/client/active_model/mozilla/notification'
