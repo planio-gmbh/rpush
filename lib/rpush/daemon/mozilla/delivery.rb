@@ -1,6 +1,114 @@
 module Rpush
   module Daemon
     module Mozilla
+
+      class Failures
+        attr_reader :temporary, :permanent
+
+        PERMANENT_ERRORS = {
+          404 => 'endpoint doesn\'t exist'
+        }
+        TEMPORARY_ERRORS = {
+          429 => 'too many requests',
+          500 => 'internal server error',
+          503 => 'service unavailable'
+        }
+
+        def initialize(notification)
+          @notification = notification
+          @permanent = []
+          @temporary = []
+        end
+
+        def all
+          @temporary + @permanent
+        end
+
+        def any?
+          @temporary.any? || @permanent.any?
+        end
+
+        def all_failed?
+          @notification.endpoints.size == all.size
+        end
+
+        def add(endpoint, response)
+          code = response.code.to_i
+          failure = {
+            endpoint: endpoint,
+            code: code,
+          }
+          if msg = TEMPORARY_ERRORS[code]
+            failure[:error] = msg
+            failure[:retry_after] = determine_retry_after(response)
+            @temporary << failure
+          else
+            failure[:error] = PERMANENT_ERRORS[code] || 'unknown error'
+            @permanent << failure
+          end
+        end
+
+        def description
+          @description ||=
+            describe(temporary, 'had temporary failures and will be retried') +
+            describe(permanent, 'failed permanently')
+        end
+
+        private
+
+        def describe(failures, message)
+          ''.tap do |result|
+            if failures.any?
+              result << "#{failures.count} recipient(s) #{message}:\n"
+              result << failures.map{|f| "#{f[:endpoint]} - #{f[:error]}"}.join("\n")
+            end
+          end
+        end
+
+        def determine_retry_after(response)
+          unless t = Rpush::Daemon::RetryHeaderParser.parse(response.header['retry-after'])
+            retries = @notification.retries || 0
+            t = Time.now + 2**(retries + 1)
+          end
+          return t
+        end
+      end
+
+      class Results
+        attr_reader :successes, :failures
+
+        def initialize(notification)
+          @notification = notification
+          @endpoints = notification.endpoints
+          @successes = []
+          @failures = Failures.new notification
+        end
+
+        def failures?
+          @failures.any?
+        end
+
+        #
+        # Response handling
+        #
+        # Remember which endpoints succeeded and which didn't
+        # Schedules failed endpoints for retry but fails hard in case of
+        # unrecoverable errors
+        #
+        def handle_response(endpoint, response)
+          case response.code.to_i
+          when 200, 201
+            @successes << endpoint
+          when 400
+            fail Rpush::DeliveryError.new(400, @notification.id, 'Mozilla failed to process the request. Possibly an Rpush bug, please open an issue.')
+          when 413
+            fail Rpush::DeliveryError.new(413, @notification.id, 'Payload was too large (should be less than 4k)')
+          else
+            @failures.add endpoint, response
+          end
+        end
+      end
+
       class Delivery < Rpush::Daemon::Delivery
 
         def initialize(app, http, notification, batch)
@@ -8,17 +116,16 @@ module Rpush
           @http = http
           @notification = notification
           @batch = batch
-          @successes = []
-          @failures = {}
         end
 
         def perform
+          results = Results.new @notification
           ttl = @notification.ttl
           @notification.each_endpoint do |endpoint, payload|
             response = do_post endpoint, payload, ttl
-            handle_response endpoint, response
+            results.handle_response endpoint, response
           end
-          handle_results
+          handle_results results
         rescue StandardError => error
           mark_failed(error)
           raise
@@ -28,60 +135,19 @@ module Rpush
 
         protected
 
-        #
-        # Response handling
-        #
-        # Remember which endpoints succeeded and which didn't
-        # Schedules failed endpoints for retry but fails hard in case of
-        # unrecoverable errors
-        #
-
-        def handle_response(endpoint, response)
-          case response.code.to_i
-          when 200, 201
-            @successes << endpoint
-          when 400
-            fail Rpush::DeliveryError.new(400, @notification.id, 'Mozilla failed to process the request. Possibly an Rpush bug, please open an issue.')
-          when 404
-            msg = "endpoint doesn't exist"
-            permanent_failure endpoint, msg
-            log_warn "Mozilla responded with 404 - #{msg}"
-          when 413
-            fail Rpush::DeliveryError.new(413, @notification.id, 'Payload was too large (should be less than 4k)')
-          when 429
-            mark_for_retry endpoint, response
-            log_warn "Mozilla responded with a Too Many Requests Error. " + retry_message(endpoint)
-          when 500
-            mark_for_retry endpoint, response
-            log_warn "Mozilla responded with an Internal Error. " + retry_message(endpoint)
-          when 503
-            mark_for_retry endpoint, response
-            log_warn "Mozilla responded with an Service Unavailable Error. " + retry_message(endpoint)
-          else
-            msg = "#{response.code} #{response.message}"
-            permanent_failure endpoint, msg
-            log_warn "Mozilla responded with an unknown error: #{msg}"
-          end
-        end
-
-        def mark_for_retry(endpoint, response)
-          (@failures[:retry] ||= []) << [endpoint, deliver_after_header(response)]
-        end
-
-        def permanent_failure(endpoint, message)
-          (@failures[:failed] ||= []) << [endpoint, message]
-        end
-
 
         #
         # Result processing
         # reschedule notifications to not permanently failed endpoints
         #
 
-        def handle_results
-          handle_successes @successes
-          if @failures.any?
-            handle_failures @failures
+        def handle_results(results)
+          handle_successes results.successes
+          if results.failures?
+            handle_failures results.failures
+            fail Rpush::DeliveryError.new(nil,
+                                          @notification.id,
+                                          results.failures.description)
           else
             mark_delivered
             log_info "#{@notification.id} sent to #{@notification.endpoints.join(', ')}"
@@ -95,63 +161,40 @@ module Rpush
         end
 
         def handle_failures(failures)
-          message = ''
-          retrials = failures[:retry] || []
-          if retrials.count == @notification.registration_ids.size
-            retry_delivery(@notification, response)
-            message = "All endpoints failed. #{retry_message}"
-            log_warn message
-          else
-            if retrials.any?
-              new_notification = create_new_notification(retrials)
-              message = "Endpoints #{retrials.join(', ')} will be retried as notification #{new_notification.id}."
-            end
-            if error = handle_errors(failures[:failed])
-              message << "\n" unless message.blank?
-              message << error
-            end
-            fail Rpush::DeliveryError.new(nil, @notification.id, message)
+          if failures.temporary.any?
+            new_notification = create_new_notification(failures.temporary)
+            log_info "#{failure.temporary.count} endpoints will be retried as notification #{new_notification.id}."
           end
-        end
 
-        def handle_errors(failed_endpoints)
-          if failed_endpoints and failed_endpoints.any?
-            failed_endpoints.each do |failed_endpoint|
-              reflect(:mozilla_failed_to_recipient, @notification, failed_endpoint)
+          failures.permanent.each do |failure|
+            reflect(:mozilla_failed_to_recipient, @notification, result[:error], result[:endpoint])
+            if failure[:code] == 404
+              reflect(:mozilla_invalid_endpoint, @app, result[:error], result[:endpoint])
             end
-            return failed_endpoints.join("\n")
           end
         end
 
         DEFAULT_DELAY = 10.minutes
+        def create_new_notification(temporary_failures)
+          endpoints = temporary_failures.map{|f| f[:endpoint]}
+          deliver_after = temporary_failures.map do |failure|
+            failure[:retry_after]
+          end.compact.max || DEFAULT_DELAY.from_now
 
-        def create_new_notification(failed_endpoints)
-          endpoints, deliver_afters = failed_endpoints.transpose
-          deliver_after = deliver_afters.compact.max || DEFAULT_DELAY.from_now
           attrs = {
             'app_id' => @notification.app_id,
             'collapse_key' => @notification.collapse_key,
-            'delay_while_idle' => @notification.delay_while_idle
+            'delay_while_idle' => @notification.delay_while_idle,
+            'retries' => ((@notification.retries || 0) + 1)
           }
-          registration_ids = @notification.registration_ids.select{|device| endpoints.include? device[:endpoint]}
+          registration_ids = @notification.registration_ids.select do |device|
+            endpoints.include? device[:endpoint]
+          end
           Rpush::Daemon.store.create_mozilla_notification(attrs,
                                                           @notification.data,
                                                           registration_ids,
                                                           deliver_after,
                                                           @notification.app)
-        end
-
-        # retry delivery to all endpoints
-        def retry_delivery
-          if time = deliver_after_header
-            mark_retryable(@notification, time)
-          else
-            mark_retryable_exponential(@notification)
-          end
-        end
-
-        def retry_message(endpoint = nil)
-          "Notification #{@notification.id}#{' to '+endpoint if endpoint} will be retried#{' after '+ @retry_delivery_after.strftime('%Y-%m-%d %H:%M:%S') if @retry_delivery_after} (retry #{@notification.retries})."
         end
 
         def do_post(endpoint, payload, ttl)
@@ -178,10 +221,6 @@ module Rpush
         rescue SocketError => error
           mark_retryable(endpoint, Time.now + 10.seconds, error)
           raise
-        end
-
-        def deliver_after_header(response)
-          Rpush::Daemon::RetryHeaderParser.parse(response.header['retry-after'])
         end
 
       end
