@@ -126,6 +126,9 @@ module Rpush
             results.handle_response endpoint, response
           end
           handle_results results
+        rescue SocketError => error
+          mark_retryable(@notification, Time.now + 10.seconds, error)
+          raise
         rescue StandardError => error
           mark_failed(error)
           raise
@@ -167,9 +170,11 @@ module Rpush
           end
 
           failures.permanent.each do |failure|
-            reflect(:mozilla_failed_to_recipient, @notification, result[:error], result[:endpoint])
+            reflect(:mozilla_failed_to_recipient,
+                    @notification, failure[:error], failure[:endpoint])
             if failure[:code] == 404
-              reflect(:mozilla_invalid_endpoint, @app, result[:error], result[:endpoint])
+              reflect(:mozilla_invalid_endpoint,
+                      @app, failure[:error], failure[:endpoint])
             end
           end
         end
@@ -218,9 +223,6 @@ module Rpush
           post.body = body
           @http.request(uri, post)
 
-        rescue SocketError => error
-          mark_retryable(endpoint, Time.now + 10.seconds, error)
-          raise
         end
 
       end
