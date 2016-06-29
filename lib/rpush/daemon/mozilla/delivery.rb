@@ -166,7 +166,7 @@ module Rpush
         def handle_failures(failures)
           if failures.temporary.any?
             new_notification = create_new_notification(failures.temporary)
-            log_info "#{failure.temporary.count} endpoints will be retried as notification #{new_notification.id}."
+            log_info "#{failures.temporary.count} endpoints will be retried as notification #{new_notification.id}."
           end
 
           failures.permanent.each do |failure|
