@@ -5,6 +5,7 @@ module Rpush
       class Failures
         attr_reader :temporary, :permanent
 
+        INVALID_ENDPOINT_ERRORS = [ 404, 410 ]
         PERMANENT_ERRORS = {
           404 => 'endpoint doesn\'t exist',
           410 => 'endpoint gone'
@@ -173,7 +174,7 @@ module Rpush
           failures.permanent.each do |failure|
             reflect(:mozilla_failed_to_recipient,
                     @notification, failure[:error], failure[:endpoint])
-            if failure[:code] == 404
+            if INVALID_ENDPOINT_ERRORS.include? failure[:code]
               reflect(:mozilla_invalid_endpoint,
                       @app, failure[:error], failure[:endpoint])
             end
