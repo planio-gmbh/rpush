@@ -6,7 +6,8 @@ module Rpush
         attr_reader :temporary, :permanent
 
         PERMANENT_ERRORS = {
-          404 => 'endpoint doesn\'t exist'
+          404 => 'endpoint doesn\'t exist',
+          410 => 'endpoint gone'
         }
         TEMPORARY_ERRORS = {
           429 => 'too many requests',
@@ -43,7 +44,7 @@ module Rpush
             failure[:retry_after] = determine_retry_after(response)
             @temporary << failure
           else
-            failure[:error] = PERMANENT_ERRORS[code] || 'unknown error'
+            failure[:error] = PERMANENT_ERRORS[code] || "unknown error: #{response.code}"
             @permanent << failure
           end
         end
