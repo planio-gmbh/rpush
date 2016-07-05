@@ -112,6 +112,8 @@ module Rpush
 
       class Delivery < Rpush::Daemon::Delivery
 
+        INVALID_ENDPOINT_ERRORS = [ 404, 410 ]
+
         def initialize(app, http, notification, batch)
           @app = app
           @http = http
@@ -173,7 +175,7 @@ module Rpush
           failures.permanent.each do |failure|
             reflect(:mozilla_failed_to_recipient,
                     @notification, failure[:error], failure[:endpoint])
-            if failure[:code] == 404
+            if INVALID_ENDPOINT_ERRORS.include? failure[:code]
               reflect(:mozilla_invalid_endpoint,
                       @app, failure[:error], failure[:endpoint])
             end
