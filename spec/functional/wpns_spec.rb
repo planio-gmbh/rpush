@@ -21,6 +21,8 @@ describe 'WPNs' do
     notification_with_alert.alert = "Hello world!"
     notification_with_alert.save!
 
+    allow(http).to receive(:read_timeout=)
+    allow(http).to receive(:open_timeout=)
     allow(Net::HTTP::Persistent).to receive_messages(new: http)
   end
 

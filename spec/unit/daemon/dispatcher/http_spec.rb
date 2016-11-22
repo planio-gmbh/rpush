@@ -9,7 +9,11 @@ describe Rpush::Daemon::Dispatcher::Http do
   let(:queue_payload) { Rpush::Daemon::QueuePayload.new(batch, notification) }
   let(:dispatcher) { Rpush::Daemon::Dispatcher::Http.new(app, delivery_class) }
 
-  before { allow(Net::HTTP::Persistent).to receive_messages(new: http) }
+  before {
+    allow(http).to receive(:read_timeout=)
+    allow(http).to receive(:open_timeout=)
+    allow(Net::HTTP::Persistent).to receive_messages(new: http)
+  }
 
   it 'constructs a new persistent connection' do
     expect(Net::HTTP::Persistent).to receive(:new)

@@ -22,6 +22,8 @@ describe 'Retries' do
       redis.del(Rpush::Client::Redis::Notification.absolute_pending_namespace)
     end
 
+    allow(http).to receive(:read_timeout=)
+    allow(http).to receive(:open_timeout=)
     allow(Net::HTTP::Persistent).to receive_messages(new: http)
     allow(response).to receive_messages(body: JSON.dump(results: [{ message_id: notification.registration_ids.first.to_s }]))
   end

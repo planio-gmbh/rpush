@@ -11,6 +11,8 @@ describe 'Pushy' do
   end
 
   before do
+    allow(http).to receive(:read_timeout=)
+    allow(http).to receive(:open_timeout=)
     allow(Net::HTTP::Persistent).to receive_messages(new: http)
   end
 

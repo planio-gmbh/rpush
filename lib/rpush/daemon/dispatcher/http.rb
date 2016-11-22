@@ -6,6 +6,8 @@ module Rpush
           @app = app
           @delivery_class = delivery_class
           @http = Net::HTTP::Persistent.new(name: 'rpush')
+          @http.read_timeout = 10
+          @http.open_timeout = 10
         end
 
         def dispatch(payload)
