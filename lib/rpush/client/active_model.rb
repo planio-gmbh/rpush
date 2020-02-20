@@ -25,3 +25,6 @@ require 'rpush/client/active_model/wns/notification'
 
 require 'rpush/client/active_model/mozilla/app'
 require 'rpush/client/active_model/mozilla/notification'
+
+require 'rpush/client/active_model/webpush/app'
+require 'rpush/client/active_model/webpush/notification'

@@ -148,6 +148,11 @@ module Rpush
           create_gcm_like_notification(notification, attrs, data, registration_ids, deliver_after, app)
         end
 
+        def create_webpush_notification(attrs, data, registration_ids, deliver_after, app)
+          notification = Rpush::Client::ActiveRecord::Webpush::Notification.new
+          create_gcm_like_notification(notification, attrs, data, registration_ids, deliver_after, app)
+        end
+
         def create_adm_notification(attrs, data, registration_ids, deliver_after, app)
           notification = Rpush::Client::ActiveRecord::Adm::Notification.new
           create_gcm_like_notification(notification, attrs, data, registration_ids, deliver_after, app)

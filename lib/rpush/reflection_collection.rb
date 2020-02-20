@@ -9,7 +9,8 @@ module Rpush
       :error, :adm_canonical_id, :adm_failed_to_recipient, :wns_invalid_channel,
       :tcp_connection_lost, :ssl_certificate_will_expire, :ssl_certificate_revoked,
       :notification_id_will_retry, :notification_id_failed,
-      :mozilla_delivered_to_recipient, :mozilla_failed_to_recipient, :mozilla_invalid_endpoint
+      :mozilla_delivered_to_recipient, :mozilla_failed_to_recipient, :mozilla_invalid_endpoint,
+      :webpush_delivered_to_recipient, :webpush_failed_to_recipient, :webpush_invalid_endpoint
     ]
 
     DEPRECATIONS = {}
