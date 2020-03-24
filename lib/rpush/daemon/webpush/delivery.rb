@@ -172,14 +172,17 @@ module Rpush
         def handle_results(results)
           handle_successes results.successes
           if results.failures?
-            handle_failures results.failures
-            fail Rpush::DeliveryError.new(nil,
-                                          @notification.id,
-                                          results.failures.description)
-          else
-            mark_delivered
-            log_info "#{@notification.id} sent to #{@notification.endpoints.join(', ')}"
+            resolved = handle_failures results.failures
+            if resolved < results.failures.size
+              fail Rpush::DeliveryError.new(nil,
+                                            @notification.id,
+                                            results.failures.description)
+              return
+            end
           end
+
+          mark_delivered
+          log_info "#{@notification.id} sent to #{@notification.endpoints.join(', ')}"
         end
 
         def handle_successes(successes)
@@ -189,19 +192,34 @@ module Rpush
         end
 
         def handle_failures(failures)
+          resolved = 0
+
           if failures.temporary.any?
             new_notification = create_new_notification(failures.temporary)
             log_info "#{failures.temporary.count} endpoints will be retried as notification #{new_notification.id}."
           end
 
           failures.permanent.each do |failure|
-            reflect(:webpush_failed_to_recipient,
-                    @notification, failure[:error], failure[:endpoint])
-            if INVALID_ENDPOINT_ERRORS.include? failure[:code]
-              reflect(:webpush_invalid_endpoint,
-                      @app, failure[:error], failure[:endpoint])
+
+            # sigh. try to handle google sender ID mismatch errors by falling back to gcm
+            if failure[:endpoint] =~ /\Ahttps:\/\/fcm.googleapis.com/ and
+                failure[:error] =~ /does not correspond to the sender ID/ and
+                gcm_chrome_app
+
+              new_notification = create_new_gcm_notification(failure)
+              log_info "1 endpoint will be retried as gcm notification #{new_notification.id}."
+              resolved += 1
+            else
+              reflect(:webpush_failed_to_recipient,
+                      @notification, failure[:error], failure[:endpoint])
+              if INVALID_ENDPOINT_ERRORS.include? failure[:code]
+                reflect(:webpush_invalid_endpoint,
+                        @app, failure[:error], failure[:endpoint])
+              end
             end
           end
+
+          return resolved
         end
 
         DEFAULT_DELAY = 10.minutes
@@ -225,6 +243,30 @@ module Rpush
                                                           registration_ids,
                                                           deliver_after,
                                                           @notification.app)
+        end
+
+        def gcm_chrome_app
+          @gcm_chrome_app ||= Rpush::App.where(name: "cordova-gcm-chrome").first
+        end
+
+        def create_new_gcm_notification(failure)
+          endpoint = failure[:endpoint]
+          deliver_after = 1.second.from_now
+
+          attrs = {
+            'app_id' => gcm_chrome_app.id,
+            'collapse_key' => @notification.collapse_key,
+            'delay_while_idle' => @notification.delay_while_idle,
+            'retries' => 1,
+          }
+          registration_id = @notification.registration_ids.detect do |device|
+            endpoint == device[:endpoint]
+          end
+          Rpush::Daemon.store.create_gcm_notification(attrs,
+                                                      @notification.data,
+                                                          [registration_id],
+                                                          deliver_after,
+                                                          gcm_chrome_app)
         end
 
       end
