@@ -202,11 +202,11 @@ module Rpush
           failures.permanent.each do |failure|
 
             # sigh. try to handle google sender ID mismatch errors by falling back to gcm
-            if failure[:endpoint] =~ /\Ahttps:\/\/fcm.googleapis.com/ and
-                failure[:error] =~ /does not correspond to the sender ID/ and
+            if failure[:error] =~ /does not correspond to the sender ID/ and
+                failure[:endpoint] =~ %r{\Ahttps://(android|fcm)\.googleapis\.com/(gcm|fcm)/send/(?<token>.*)\z} and
                 gcm_chrome_app
 
-              new_notification = create_new_gcm_notification(failure)
+              new_notification = create_new_gcm_notification(failure, $~['token'])
               log_info "1 endpoint will be retried as gcm notification #{new_notification.id}."
               resolved += 1
             else
@@ -249,8 +249,7 @@ module Rpush
           @gcm_chrome_app ||= Rpush::App.where(name: "cordova-gcm-chrome").first
         end
 
-        def create_new_gcm_notification(failure)
-          endpoint = failure[:endpoint]
+        def create_new_gcm_notification(failure, token)
           deliver_after = 1.second.from_now
 
           attrs = {
@@ -259,14 +258,11 @@ module Rpush
             'delay_while_idle' => @notification.delay_while_idle,
             'retries' => 1,
           }
-          registration_id = @notification.registration_ids.detect do |device|
-            endpoint == device[:endpoint]
-          end
           Rpush::Daemon.store.create_gcm_notification(attrs,
                                                       @notification.data,
-                                                          [registration_id],
-                                                          deliver_after,
-                                                          gcm_chrome_app)
+                                                      [token],
+                                                      deliver_after,
+                                                      gcm_chrome_app)
         end
 
       end
