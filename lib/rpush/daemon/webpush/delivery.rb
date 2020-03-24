@@ -46,7 +46,8 @@ module Rpush
             failure[:retry_after] = determine_retry_after(response)
             @temporary << failure
           else
-            failure[:error] = PERMANENT_ERRORS[code] || "unknown error: #{response.code}"
+            msg = response.body.to_s[0..200]
+            failure[:error] = PERMANENT_ERRORS[code] || "unknown error: #{response.code} #{msg}"
             @permanent << failure
           end
         end
