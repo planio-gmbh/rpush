@@ -27,6 +27,10 @@ module Rpush
           @temporary + @permanent
         end
 
+        def size
+          all.size
+        end
+
         def any?
           @temporary.any? || @permanent.any?
         end
