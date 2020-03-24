@@ -42,6 +42,10 @@ module Rpush
             @subscription ||= registration_ids.first.deep_symbolize_keys
           end
 
+          def endpoint
+            subscription[:endpoint]
+          end
+
           def message
             data['message'].presence if data
           end

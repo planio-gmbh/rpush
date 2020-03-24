@@ -85,7 +85,16 @@ module Rpush
         end
 
         def fail_delivery(response)
-          fail_message = fail_message(response)
+          # Try to handle google's "sender ID mismatch" errors by falling back to gcm
+          if response.body =~ /does not correspond to the sender ID/ and
+              @notification.endpoint =~ %r{\Ahttps://(android|fcm)\.googleapis\.com/(gcm|fcm)/send/(?<token>.*)\z} and
+              gcm_chrome_app.present?
+
+            new_notification = create_new_gcm_notification($~['token'])
+            fail_message = "will be retried as gcm notification #{new_notification.id}."
+          else
+            fail_message = fail_message(response)
+          end
           log_error("#{@notification.id} failed: #{fail_message}")
           fail Rpush::DeliveryError.new(response.code.to_i, @notification.id, fail_message)
         end
@@ -105,6 +114,26 @@ module Rpush
             msg += ": #{explanation}"
           end
           msg
+        end
+
+        def gcm_chrome_app
+          @gcm_chrome_app ||= Rpush::App.where(name: "cordova-gcm-chrome").first
+        end
+
+        def create_new_gcm_notification(token)
+          deliver_after = 1.second.from_now
+
+          attrs = {
+            'app_id' => gcm_chrome_app.id,
+            'collapse_key' => @notification.collapse_key,
+            'delay_while_idle' => @notification.delay_while_idle,
+            'retries' => 1,
+          }
+          Rpush::Daemon.store.create_gcm_notification(attrs,
+                                                      @notification.data,
+                                                      [token],
+                                                      deliver_after,
+                                                      gcm_chrome_app)
         end
 
       end
